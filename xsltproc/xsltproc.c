@@ -19,6 +19,9 @@
 #ifdef HAVE_TIME_H
 #include <time.h>
 #endif
+#ifdef HAVE_SYS_TYPES_H
+#include <sys/types.h>
+#endif
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
 #endif
@@ -34,6 +37,7 @@
 #if defined(_WIN32) && !defined(__CYGWIN__)
 #include <fcntl.h>
 #endif
+#include <fcntl.h>
 #include <libxml/xmlmemory.h>
 #include <libxml/debugXML.h>
 #include <libxml/HTMLtree.h>
@@ -51,6 +55,7 @@
 #include <libxslt/xslt.h>
 #include <libxslt/xsltInternals.h>
 #include <libxslt/transform.h>
+#include <libxslt/variables.h>
 #include <libxslt/xsltutils.h>
 #include <libxslt/extensions.h>
 #include <libxslt/security.h>
@@ -327,6 +332,85 @@ static void endTimer(const char *format, ...)
 }
 #endif
 
+/* duplicated from libxml2's catalog.c -> should it move to IO API ? */
+/**
+ * xmlLoadFileContent:
+ * @filename:  a file path
+ *
+ * Load a file content into memory.
+ *
+ * Returns a pointer to the 0 terminated string or NULL in case of error
+ */
+static xmlChar *
+xmlLoadFileContent(const char *filename)
+{
+#ifdef HAVE_STAT
+    int fd;
+#else
+    FILE *fd;
+#endif
+    int len;
+    long size;
+
+#ifdef HAVE_STAT
+    struct stat info;
+#endif
+    xmlChar *content;
+
+    if (filename == NULL)
+        return (NULL);
+
+#ifdef HAVE_STAT
+    if (stat(filename, &info) < 0){
+        fprintf(stderr, "can't find file for file content load\n");
+        return (NULL);
+    }
+#endif
+
+#ifdef HAVE_STAT
+    if ((fd = open(filename, O_RDONLY)) < 0)
+#else
+    if ((fd = fopen(filename, "rb")) == NULL)
+#endif
+    {
+        fprintf(stderr, "can't open file for file content load\n");
+        return (NULL);
+    }
+#ifdef HAVE_STAT
+    size = info.st_size;
+#else
+    if (fseek(fd, 0, SEEK_END) || (size = ftell(fd)) == EOF || fseek(fd, 0, SEEK_SET)) {        /* File operations denied? ok, just close and return failure */
+        fclose(fd);
+        fprintf(stderr, "can't get file size for file content load\n");
+        return (NULL);
+    }
+#endif
+    content = (xmlChar*)xmlMallocAtomic(size + 10);
+    if (content == NULL) {
+        fprintf(stderr, "can't allocate buffer for file content load\n");
+#ifdef HAVE_STAT
+        close(fd);
+#else
+        fclose(fd);
+#endif
+        return (NULL);
+    }
+#ifdef HAVE_STAT
+    len = read(fd, content, size);
+    close(fd);
+#else
+    len = fread(content, 1, size, fd);
+    fclose(fd);
+#endif
+    if (len < 0) {
+        xmlFree(content);
+        return (NULL);
+    }
+    content[len] = 0;
+
+    return(content);
+}
+
 /*
  * xsltSubtreeCheck:
  *
@@ -399,6 +483,7 @@ xsltProcess(xmlDocPtr doc, xsltStylesheetPtr cur, const char *filename) {
 	if (ctxt == NULL)
 	    return;
 	xsltSetCtxtParseOptions(ctxt, options);
+        xsltQuoteUserParams(ctxt, (const char **)strparams);
 #ifdef LIBXML_XINCLUDE_ENABLED
 	if (xinclude)
 	    ctxt->xinclude = 1;
@@ -524,6 +609,7 @@ static void usage(const char *name) {
     printf("\t       string values must be quoted like \"'string'\"\n or");
     printf("\t       use stringparam to avoid it\n");
     printf("\t--stringparam name value : pass a (parameter, UTF8 string value) pair\n");
+    printf("\t--fileparam name path : pass a (parameter, UTF8 string value) pair, string value loaded from file\n");
     printf("\t--path 'paths': provide a set of paths for resources\n");
     printf("\t--nonet : refuse to fetch DTDs or entities over network\n");
     printf("\t--nowrite : refuse to write to any file or resource\n");
@@ -710,26 +796,34 @@ main(int argc, char **argv)
 	    xmlChar *value;
 
             i++;
-            params[nbparams++] = argv[i++];
+            strparams[nbstrparams++] = xmlStrdup((xmlChar *) argv[i++]);
 	    string = (const xmlChar *) argv[i];
-	    if (xmlStrchr(string, '"')) {
-		if (xmlStrchr(string, '\'')) {
-		    fprintf(stderr,
-		    "stringparam contains both quote and double-quotes !\n");
-		    return(8);
-		}
-		value = xmlStrdup((const xmlChar *)"'");
-		value = xmlStrcat(value, string);
-		value = xmlStrcat(value, (const xmlChar *)"'");
-	    } else {
-		value = xmlStrdup((const xmlChar *)"\"");
-		value = xmlStrcat(value, string);
-		value = xmlStrcat(value, (const xmlChar *)"\"");
-	    }
-
-            params[nbparams++] = (const char *) value;
+            value = xmlStrdup((const xmlChar *)string);
 	    strparams[nbstrparams++] = value;
-            if (nbparams >= MAX_PARAMETERS) {
+            if (nbstrparams >= MAX_PARAMETERS) {
+                fprintf(stderr, "too many params increase MAX_PARAMETERS \n");
+                return (2);
+            }
+        } else if ((!strcmp(argv[i], "-fileparam")) ||
+                   (!strcmp(argv[i], "--fileparam"))) {
+            const xmlChar *string;
+            const char *filename;
+            xmlChar *value;
+
+            i++;
+            strparams[nbstrparams++] = xmlStrdup((xmlChar *) argv[i++]);
+            filename = argv[i];
+            string = xmlLoadFileContent(filename);
+            if (string == NULL) {
+                fprintf(stderr,
+                        "couldn't load '%s' file content as string literal parameter\n",
+                        filename);
+                return (2);
+            }
+
+            value = xmlStrdup((const xmlChar *)string);
+            strparams[nbstrparams++] = value;
+            if (nbstrparams >= MAX_PARAMETERS) {
                 fprintf(stderr, "too many params increase MAX_PARAMETERS \n");
                 return (2);
             }
@@ -847,6 +941,11 @@ main(int argc, char **argv)
         }
         if ((!strcmp(argv[i], "-stringparam")) ||
             (!strcmp(argv[i], "--stringparam"))) {
+            i += 2;
+            continue;
+        }
+        if ((!strcmp(argv[i], "-fileparam")) ||
+            (!strcmp(argv[i], "--fileparam"))) {
             i += 2;
             continue;
         }
