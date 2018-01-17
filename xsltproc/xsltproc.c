@@ -786,7 +786,7 @@ main(int argc, char **argv)
             i++;
             params[nbparams++] = argv[i++];
             params[nbparams++] = argv[i];
-            if (nbparams >= MAX_PARAMETERS) {
+            if (nbparams + nbstrparams >= MAX_PARAMETERS) {
                 fprintf(stderr, "too many params increase MAX_PARAMETERS \n");
                 return (2);
             }
@@ -800,7 +800,7 @@ main(int argc, char **argv)
 	    string = (const xmlChar *) argv[i];
             value = xmlStrdup((const xmlChar *)string);
 	    strparams[nbstrparams++] = value;
-            if (nbstrparams >= MAX_PARAMETERS) {
+            if (nbparams + nbstrparams >= MAX_PARAMETERS) {
                 fprintf(stderr, "too many params increase MAX_PARAMETERS \n");
                 return (2);
             }
@@ -823,7 +823,7 @@ main(int argc, char **argv)
 
             value = xmlStrdup((const xmlChar *)string);
             strparams[nbstrparams++] = value;
-            if (nbstrparams >= MAX_PARAMETERS) {
+            if (nbparams + nbstrparams >= MAX_PARAMETERS) {
                 fprintf(stderr, "too many params increase MAX_PARAMETERS \n");
                 return (2);
             }
